@@ -8,14 +8,8 @@
     "history": [
       {
         "date": "2026-04-23",
-        "snkrdunk_jpy": 213000,
-        "snkrdunk_sales_24h": 18,
-        "snkrdunk_sales_7d": 20
-      },
-      {
-        "date": "2026-04-24",
         "snkrdunk_jpy": 71000,
-        "snkrdunk_sales_24h": 19,
+        "snkrdunk_sales_24h": 18,
         "snkrdunk_sales_7d": 20
       }
     ]
@@ -32,12 +26,6 @@
         "snkrdunk_jpy": null,
         "snkrdunk_sales_24h": 0,
         "snkrdunk_sales_7d": 0
-      },
-      {
-        "date": "2026-04-24",
-        "snkrdunk_jpy": null,
-        "snkrdunk_sales_24h": 0,
-        "snkrdunk_sales_7d": 0
       }
     ]
   },
@@ -50,12 +38,6 @@
     "history": [
       {
         "date": "2026-04-23",
-        "snkrdunk_jpy": null,
-        "snkrdunk_sales_24h": 0,
-        "snkrdunk_sales_7d": 0
-      },
-      {
-        "date": "2026-04-24",
         "snkrdunk_jpy": null,
         "snkrdunk_sales_24h": 0,
         "snkrdunk_sales_7d": 0
