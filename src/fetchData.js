@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { format } = require('date-fns');
-const box = require('./config.json');
+const boxes = require('./config.json');
 const { scrapeSnkrdunkPrice, fetchSnkrdunkHistory } = require('./scrapers/snkrdunk');
 
 const DATA_FILE  = path.join(__dirname, '../data/prices.json');
@@ -37,8 +37,8 @@ function checkPriceAlert(name, newPrice, history) {
  * Writes a daily log file: data/logs/YYYY-MM-DD.json
  * Contains 24h summary — price, sales, and delta vs previous day.
  */
-function writeDailyLog(boxMeta, today, todayEntry, previousEntry, availableSizes) {
-  const logPath = path.join(LOGS_DIR, `${today}.json`);
+function writeDailyLog(boxMeta, today, todayEntry, previousEntry, availableSizes, boxConfig) {
+  const logPath = path.join(LOGS_DIR, `${today}_${boxConfig.id}.json`);
 
   const prevPrice = previousEntry?.snkrdunk_jpy ?? null;
   const currPrice = todayEntry.snkrdunk_jpy;
@@ -51,11 +51,11 @@ function writeDailyLog(boxMeta, today, todayEntry, previousEntry, availableSizes
     date: today,
     fetched_at: new Date().toISOString(),
     box: {
-      id:      boxMeta.id,
+      id:      boxConfig.id,
       name_en: boxMeta.name_en,
       name_ja: boxMeta.name_ja || '',
-      snkrdunk_product_id: box.snkrdunk_product_id,
-      snkrdunk_size_id:    box.snkrdunk_size_id ?? 1,
+      snkrdunk_product_id: boxConfig.snkrdunk_product_id,
+      snkrdunk_size_id:    boxConfig.snkrdunk_size_id ?? 1,
     },
     price: {
       current_jpy:  currPrice,
@@ -74,12 +74,12 @@ function writeDailyLog(boxMeta, today, todayEntry, previousEntry, availableSizes
   };
 
   fs.writeFileSync(logPath, JSON.stringify(log, null, 2));
-  console.log(`\n📋 Daily log written → data/logs/${today}.json`);
+  console.log(`\n📋 Daily log written → data/logs/${today}_${boxConfig.id}.json`);
   console.log(`   Price: ¥${currPrice?.toLocaleString() ?? 'N/A'} | Change: ${changePct != null ? (changePct >= 0 ? '+' : '') + changePct + '%' : 'N/A'} | 24h sales: ${todayEntry.snkrdunk_sales_24h ?? 'N/A'}`);
 }
 
 async function main() {
-  console.log(`Starting ポケtracker — tracking: ${box.name_en}`);
+  console.log(`Starting ポケtracker — tracking: ${boxes.map(b => b.name_en).join(', ')}`);
   initializeFiles();
 
   const rawData = fs.readFileSync(DATA_FILE, 'utf-8');
@@ -91,79 +91,85 @@ async function main() {
   }
 
   const today   = format(new Date(), 'yyyy-MM-dd');
-  const sizeId  = box.snkrdunk_size_id ?? 1;
 
-  // Initialize record if new
-  if (!pricesDb[box.id]) {
-    pricesDb[box.id] = {
-      metadata: {
-        name_en: box.name_en,
-        name_ja: box.name_ja || '',
-        imageUrl: box.imageUrl || null,
-      },
-      history: [],
+  for (const boxConfig of boxes) {
+    console.log(`\n=========================================`);
+    console.log(`Tracking: ${boxConfig.name_en}`);
+    const sizeId  = boxConfig.snkrdunk_size_id ?? 1;
+
+    // Initialize record if new
+    if (!pricesDb[boxConfig.id]) {
+      pricesDb[boxConfig.id] = {
+        metadata: {
+          name_en: boxConfig.name_en,
+          name_ja: boxConfig.name_ja || '',
+          imageUrl: boxConfig.imageUrl || null,
+        },
+        history: [],
+      };
+    }
+
+    // Keep metadata in sync with config
+    pricesDb[boxConfig.id].metadata = {
+      name_en: boxConfig.name_en,
+      name_ja: boxConfig.name_ja || '',
+      imageUrl: boxConfig.imageUrl || pricesDb[boxConfig.id].metadata.imageUrl || null,
     };
+
+    // Backfill historical data on first run
+    if (pricesDb[boxConfig.id].history.length === 0 && boxConfig.snkrdunk_product_id) {
+      console.log(' -> First run: backfilling historical chart data...');
+      const historicalPoints = await fetchSnkrdunkHistory(boxConfig.snkrdunk_product_id, sizeId);
+      pricesDb[boxConfig.id].history = historicalPoints;
+      console.log(` -> Loaded ${historicalPoints.length} historical data points`);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    // Fetch current price
+    console.log(`\n--- Fetching SNKRDUNK (product: ${boxConfig.snkrdunk_product_id}, size_id: ${sizeId}) ---`);
+    const { price, sales24h, sales7d, availableSizes } = await scrapeSnkrdunkPrice(
+      boxConfig.snkrdunk_product_id,
+      sizeId
+    );
+
+    // Check for price spike
+    checkPriceAlert(boxConfig.name_en, price, pricesDb[boxConfig.id].history);
+
+    // Find the previous day's entry (for the daily log delta)
+    const previousEntry = [...pricesDb[boxConfig.id].history]
+      .reverse()
+      .find(e => e.date !== today && e.snkrdunk_jpy != null);
+
+    // Upsert today's entry
+    const history = pricesDb[boxConfig.id].history;
+    const existingIdx = history.findIndex(e => e.date === today);
+    const newEntry = {
+      date: today,
+      snkrdunk_jpy:       price ?? null,
+      snkrdunk_sales_24h: sales24h,
+      snkrdunk_sales_7d:  sales7d,
+    };
+
+    if (existingIdx > -1) {
+      history[existingIdx] = { ...history[existingIdx], ...newEntry };
+    } else {
+      history.push(newEntry);
+    }
+
+    // Write prices.json
+    fs.writeFileSync(DATA_FILE, JSON.stringify(pricesDb, null, 2));
+    console.log('\nprices.json updated.');
+
+    // Write daily log
+    writeDailyLog(
+      pricesDb[boxConfig.id].metadata,
+      today,
+      newEntry,
+      previousEntry,
+      availableSizes,
+      boxConfig
+    );
   }
-
-  // Keep metadata in sync with config
-  pricesDb[box.id].metadata = {
-    name_en: box.name_en,
-    name_ja: box.name_ja || '',
-    imageUrl: box.imageUrl || pricesDb[box.id].metadata.imageUrl || null,
-  };
-
-  // Backfill historical data on first run
-  if (pricesDb[box.id].history.length === 0 && box.snkrdunk_product_id) {
-    console.log(' -> First run: backfilling historical chart data...');
-    const historicalPoints = await fetchSnkrdunkHistory(box.snkrdunk_product_id, sizeId);
-    pricesDb[box.id].history = historicalPoints;
-    console.log(` -> Loaded ${historicalPoints.length} historical data points`);
-    await new Promise(r => setTimeout(r, 1000));
-  }
-
-  // Fetch current price
-  console.log(`\n--- Fetching SNKRDUNK (product: ${box.snkrdunk_product_id}, size_id: ${sizeId}) ---`);
-  const { price, sales24h, sales7d, availableSizes } = await scrapeSnkrdunkPrice(
-    box.snkrdunk_product_id,
-    sizeId
-  );
-
-  // Check for price spike
-  checkPriceAlert(box.name_en, price, pricesDb[box.id].history);
-
-  // Find the previous day's entry (for the daily log delta)
-  const previousEntry = [...pricesDb[box.id].history]
-    .reverse()
-    .find(e => e.date !== today && e.snkrdunk_jpy != null);
-
-  // Upsert today's entry
-  const history = pricesDb[box.id].history;
-  const existingIdx = history.findIndex(e => e.date === today);
-  const newEntry = {
-    date: today,
-    snkrdunk_jpy:       price ?? null,
-    snkrdunk_sales_24h: sales24h,
-    snkrdunk_sales_7d:  sales7d,
-  };
-
-  if (existingIdx > -1) {
-    history[existingIdx] = { ...history[existingIdx], ...newEntry };
-  } else {
-    history.push(newEntry);
-  }
-
-  // Write prices.json
-  fs.writeFileSync(DATA_FILE, JSON.stringify(pricesDb, null, 2));
-  console.log('\nprices.json updated.');
-
-  // Write daily log
-  writeDailyLog(
-    pricesDb[box.id].metadata,
-    today,
-    newEntry,
-    previousEntry,
-    availableSizes
-  );
 }
 
 main();
