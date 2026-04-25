@@ -65,21 +65,31 @@ async function scrapeSnkrdunkPrice(productId, sizeId = 1) {
       console.log(`[SNKRDUNK] ID ${productId}: sizes in response → ${availableSizes.join(', ')}`);
     }
 
-    // Filter specifically for single box sales (1BOX).
-    // This ensures we skip multi-box sales (e.g. "3BOX", "2BOX").
+    // Filter specifically for single box sales.
+    // Since some products use sizes like "With Shrink" instead of explicitly "1BOX",
+    // we assume it is a single box UNLESS it explicitly says 2BOX, 3BOX, Carton, etc.
     const targeted = history.filter(item => {
       if (item.size) {
-        const sizeStr = String(item.size).replace(/\s+/g, '').toUpperCase();
-        return sizeStr === '1BOX' || sizeStr.startsWith('1BOX(');
+        // Convert full-width to half-width (e.g. ２ＢＯＸ -> 2BOX)
+        const sizeStr = String(item.size).replace(/[０-９Ａ-Ｚａ-ｚ]/g, function(s) {
+            return String.fromCharCode(s.charCodeAt(0) - 0xFEE0);
+        }).replace(/\s+/g, '').toUpperCase();
+        
+        // Check for 2BOX, 3BOX... up to 99BOX, or "カートン" (Carton)
+        const isMultiBox = /([2-9]|1[0-9]+)BOX/.test(sizeStr) || sizeStr.includes('カートン');
+        return !isMultiBox;
       }
       // Fallback if 'size' string is missing
       return item.size_id === sizeId || item.size_id === String(sizeId);
     });
-    // Fall back to full history if the filter yields nothing (API may not support size_id param for all products)
-    const salesPool = targeted.length > 0 ? targeted : history;
+
+    // If the filter yields nothing, we do NOT fall back to the full history.
+    // Falling back to full history would pollute the data with a multi-box price.
+    // Instead, we leave salesPool empty, which will trigger the chart API fallback later.
+    const salesPool = targeted;
 
     if (salesPool.length === 0) {
-      console.warn(`[SNKRDUNK] ID ${productId}: no sales found for size_id=${sizeId}. Available: ${availableSizes.join(', ') || 'none'}`);
+      console.warn(`[SNKRDUNK] ID ${productId}: no 1-box sales found in recent history. Will fallback to chart API using configured size_id=${sizeId}`);
     }
 
     // Most recent sale price for this size
